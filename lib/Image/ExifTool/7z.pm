@@ -124,6 +124,122 @@ sub ReadPackInfo {
     return 1;
 }
 
+sub findInBinPair {
+    my @bindpairs = @{$_[0]};
+    my $index = $_[1];
+    
+    for (my $i = 0; $i < scalar(@bindpairs); $i++) {
+        if($bindpairs[$i] == $index){
+            return $i;
+        }
+    }
+    return -1;
+}
+
+
+sub ReadFolder {
+    my $buff;
+    my $totalin = 0;
+    my $totalout = 0;
+    my @coders;
+    my @bindpairs;
+    my @packed_indices;
+    my %c = ();
+
+    my $num_coders = ReadUInt64($_[0]);
+    print("num_coders:$num_coders\n");
+    
+    for (my $i = 0; $i < $num_coders; $i++) {
+        $_[0]->Read($buff, 1);
+        my $b = ord($buff);
+        my $methodsize = $b & 0xF;
+        my $iscomplex = ($b & 0x10) == 0x10;
+        my $hasattributes = ($b & 0x20) == 0x20;
+        if($methodsize > 0){
+           $_[0]->Read($buff, $methodsize);
+           $c{"method"} = $buff;
+        }
+        else{
+           $c{"method"} = "\0";
+        }
+        if($iscomplex){
+            $c{"numinstreams"} = ReadUInt64($_[0]);
+            $c{"numoutstreams"} = ReadUInt64($_[0]);
+        }
+        else{
+            $c{"numinstreams"} = 1;
+            $c{"numoutstreams"} = 1;
+        }
+        $totalin += $c{"numinstreams"};
+        $totalout += $c{"numoutstreams"};
+        if($hasattributes){
+            my $proplen = ReadUInt64($_[0]);
+            $_[0]->Read($buff, $proplen);
+            $c{"properties"} = $buff;
+        } 
+        else {
+            $c{"properties"} = undef;
+        }      
+        push(@coders, %c);   
+    }
+    my $num_bindpairs = $totalout - 1;
+    for (my $i = 0; $i < $num_bindpairs; $i++) {
+        my @bond = (ReadUInt64($_[0]), ReadUInt64($_[0]));
+        push(@bindpairs, @bond);
+    }
+    my $num_packedstreams = $totalin - $num_bindpairs;
+    if($num_packedstreams == 1){
+        for (my $i = 0; $i < $totalin; $i++) {
+            if(findInBinPair(\@bindpairs, $i) < 0){
+                push(@packed_indices, $i);
+            }
+        }
+    }
+    else{
+        for (my $i = 0; $i < $num_packedstreams; $i++) {
+            push(@packed_indices, ReadUInt64($_[0]));
+        }
+    }
+}
+
+sub RetrieveCodersInfo{
+    my $buff;
+
+    $_[0]->Read($buff, 1);
+    my $pid = ord($buff);
+    
+    if($pid != 0x0c){ # coders unpack size id expected
+        return 0;
+    }
+    print("everything is ok until now($pid)\n");
+}
+
+sub ReadUnpackInfo {
+    my $buff;
+    
+    $_[0]->Read($buff, 1);
+    my $pid = ord($buff);
+    
+    if($pid != 0xb) {  # folder id expected
+        return 0;
+    }
+    
+    my $numfolders = ReadUInt64($_[0]);
+    my @folders = ();
+    
+    $_[0]->Read($buff, 1);
+    my $external = ord($buff);
+    
+    if($external == 0x00){
+        for (my $i = 0 ; $i < $numfolders ; $i++) {
+            ReadFolder($_[0]);
+            # push(@folders, );
+        }
+    }
+    RetrieveCodersInfo($_[0]);
+    return 1;
+}
+
 
 sub ReadStreamsInfo {
     my $buff;
@@ -137,7 +253,10 @@ sub ReadStreamsInfo {
     }
     if($pid == 7) {  # unpack info
         print("unpack info\n");
+        return 0 unless ReadUnpackInfo($_[0]);
     }
+    
+    return 1;
 }
 
 #------------------------------------------------------------------------------
