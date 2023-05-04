@@ -13,6 +13,8 @@ package Image::ExifTool::7z;
 
 use strict;
 
+use Data::Dumper;
+
 
 sub ReadUInt32 {
     my $buff;
@@ -141,9 +143,10 @@ sub ReadFolder {
     my $buff;
     my $totalin = 0;
     my $totalout = 0;
-    my @coders;
-    my @bindpairs;
-    my @packed_indices;
+    my %out_folder = ();
+    $out_folder{"packed_indices"} = ();
+    $out_folder{"bindpairs"} = ();
+    $out_folder{"coders"} = ();
     my %c = ();
 
     my $num_coders = ReadUInt64($_[0]);
@@ -180,30 +183,33 @@ sub ReadFolder {
         else {
             $c{"properties"} = undef;
         }      
-        push(@coders, %c);   
+        push(@{ $out_folder{"coders"} }, %c);   
     }
     my $num_bindpairs = $totalout - 1;
     for (my $i = 0; $i < $num_bindpairs; $i++) {
         my @bond = (ReadUInt64($_[0]), ReadUInt64($_[0]));
-        push(@bindpairs, @bond);
+        push(@{ $out_folder{"bindpairs"} }, @bond);
     }
     my $num_packedstreams = $totalin - $num_bindpairs;
     if($num_packedstreams == 1){
         for (my $i = 0; $i < $totalin; $i++) {
-            if(findInBinPair(\@bindpairs, $i) < 0){
-                push(@packed_indices, $i);
+            if(findInBinPair(\@{ $out_folder{"bindpairs"} }, $i) < 0){
+                push(@{ $out_folder{"packed_indices"} }, $i);
             }
         }
     }
     else{
         for (my $i = 0; $i < $num_packedstreams; $i++) {
-            push(@packed_indices, ReadUInt64($_[0]));
+            push(@{ $out_folder{"packed_indices"} }, ReadUInt64($_[0]));
         }
     }
+    
+    return %out_folder;
 }
 
 sub RetrieveCodersInfo{
     my $buff;
+    my @folders = $_[1];
 
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -212,6 +218,13 @@ sub RetrieveCodersInfo{
         return 0;
     }
     print("everything is ok until now($pid)\n");
+    foreach my $folder (@folders) {
+    #print(Dumper($folder->{"coders"}));
+        foreach my $c ($folder->{"coders"}) {
+            my %current_c = $c;
+            print(Dumper(%current_c));
+        }
+    }
 }
 
 sub ReadUnpackInfo {
@@ -232,11 +245,11 @@ sub ReadUnpackInfo {
     
     if($external == 0x00){
         for (my $i = 0 ; $i < $numfolders ; $i++) {
-            ReadFolder($_[0]);
-            # push(@folders, );
+            my %folder = ReadFolder($_[0]);
+            push(@folders, \%folder);
         }
     }
-    RetrieveCodersInfo($_[0]);
+    RetrieveCodersInfo($_[0], @folders);
     return 1;
 }
 
