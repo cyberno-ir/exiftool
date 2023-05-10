@@ -233,7 +233,13 @@ sub RetrieveCodersInfo{
         my $numfolders = scalar(@folders);
         print("num_folders:$numfolders\n");
         my @defined = ReadBoolean($_[0], $numfolders, 1);
-        print(Dumper($defined[0]));
+        my @crcs;
+        foreach my $crcexist (@digestdefined) {
+            if($crcexist){
+                push(@crcs, ReadUInt32($_[0]));
+            }
+        }
+        print(Dumper(@crcs));
     }
     
 }
