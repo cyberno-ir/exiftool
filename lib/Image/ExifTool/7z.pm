@@ -70,7 +70,7 @@ sub ReadBoolean {
         $_[0]->Read($buff, 1);
         my $all_defined = ord($buff);
         if($all_defined != 0){
-            return (1)x50;
+            return (1)x$count;
         }
     }
     
@@ -233,7 +233,7 @@ sub RetrieveCodersInfo{
         my $numfolders = scalar(@folders);
         print("num_folders:$numfolders\n");
         my @defined = ReadBoolean($_[0], $numfolders, 1);
-        print(Dumper(@defined));
+        print(Dumper($defined[0]));
     }
     
 }
