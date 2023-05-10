@@ -234,14 +234,23 @@ sub RetrieveCodersInfo{
         print("num_folders:$numfolders\n");
         my @defined = ReadBoolean($_[0], $numfolders, 1);
         my @crcs;
-        foreach my $crcexist (@digestdefined) {
+        foreach my $crcexist (@defined) {
             if($crcexist){
                 push(@crcs, ReadUInt32($_[0]));
             }
         }
-        print(Dumper(@crcs));
+        for (my $i = 0 ; $i < $numfolders ; $i++) {
+            $folders[$i]->{"digestdefined"} = $defined[$i];
+            $folders[$i]->{"crc"} = $crcs[$i];
+        }
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
     }
     
+    if($pid != 0x00){ # end id expected
+        return 0;    
+    }
+    return 1;
 }
 
 sub ReadUnpackInfo {
@@ -266,7 +275,7 @@ sub ReadUnpackInfo {
             push(@folders, \%folder);
         }
     }
-    RetrieveCodersInfo($_[0], @folders);
+    return 0 unless RetrieveCodersInfo($_[0], @folders);
     return 1;
 }
 
@@ -285,7 +294,9 @@ sub ReadStreamsInfo {
         print("unpack info\n");
         return 0 unless ReadUnpackInfo($_[0]);
     }
-    
+    if($pid != 0x00){ # end id expected
+        return 0;    
+    }
     return 1;
 }
 
