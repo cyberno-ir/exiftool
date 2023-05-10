@@ -233,6 +233,7 @@ sub RetrieveCodersInfo{
         my $numfolders = scalar(@folders);
         print("num_folders:$numfolders\n");
         my @defined = ReadBoolean($_[0], $numfolders, 1);
+        print(Dumper(@defined));
     }
     
 }
