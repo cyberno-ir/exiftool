@@ -183,7 +183,7 @@ sub ReadFolder {
         else {
             $c{"properties"} = undef;
         }      
-        push(@{ $out_folder{"coders"} }, %c);   
+        push(@{ $out_folder{"coders"} }, \%c);   
     }
     my $num_bindpairs = $totalout - 1;
     for (my $i = 0; $i < $num_bindpairs; $i++) {
@@ -219,12 +219,22 @@ sub RetrieveCodersInfo{
     }
     print("everything is ok until now($pid)\n");
     foreach my $folder (@folders) {
-    #print(Dumper($folder->{"coders"}));
-        foreach my $c ($folder->{"coders"}) {
-            my %current_c = $c;
-            print(Dumper(%current_c));
+        $folder->{"unpacksizes"} = ();
+        foreach my $c (@{ $folder->{"coders"} }) {
+            for (my $i = 0 ; $i < $c->{"numoutstreams"} ; $i++) {
+                push(@{ $folder->{"unpacksizes" } }, ReadUInt64($_[0]));
+            }
         }
     }
+    $_[0]->Read($buff, 1);
+    $pid = ord($buff);
+
+    if($pid == 0x0a){  #crc
+        my $numfolders = scalar(@folders);
+        print("num_folders:$numfolders\n");
+        my @defined = ReadBoolean($_[0], $numfolders, 1);
+    }
+    
 }
 
 sub ReadUnpackInfo {
