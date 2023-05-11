@@ -93,10 +93,12 @@ sub ReadBoolean {
 
 sub ReadPackInfo {
     my $buff;
+    my %out_packinfo = ();
+    $out_packinfo{"packsizes"} = ();
     
-    my $packpos = ReadUInt64($_[0]);
+    $out_packinfo{"packpos"} = ReadUInt64($_[0]);
     my $numstreams = ReadUInt64($_[0]);
-    print("Pack:$packpos,Num:$numstreams\n");
+    print("Num:$numstreams\n");
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -104,7 +106,7 @@ sub ReadPackInfo {
     my @packsizes;
     if($pid == 9){  # size
         for (my $i = 0 ; $i < $numstreams ; $i++) {
-            push(@packsizes, ReadUInt64($_[0]));
+            push(@{ $out_packinfo{"packsizes"} }, ReadUInt64($_[0]));
         }
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
@@ -123,7 +125,7 @@ sub ReadPackInfo {
     if($pid != 0) {  # end id expected
         return 0;
     }
-    return 1;
+    return \%out_packinfo;
 }
 
 sub findInBinPair {
@@ -255,6 +257,7 @@ sub RetrieveCodersInfo{
 
 sub ReadUnpackInfo {
     my $buff;
+    my %out_unpackinfo = ();
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -263,41 +266,77 @@ sub ReadUnpackInfo {
         return 0;
     }
     
-    my $numfolders = ReadUInt64($_[0]);
-    my @folders = ();
+    $out_unpackinfo{"numfolders"} = ReadUInt64($_[0]);
+    $out_unpackinfo{"folders"} = ();
     
     $_[0]->Read($buff, 1);
     my $external = ord($buff);
     
     if($external == 0x00){
-        for (my $i = 0 ; $i < $numfolders ; $i++) {
+        for (my $i = 0 ; $i < $out_unpackinfo{"numfolders"}; $i++) {
             my %folder = ReadFolder($_[0]);
-            push(@folders, \%folder);
+            push(@{ $out_unpackinfo{"folders"} }, \%folder);
         }
     }
-    return 0 unless RetrieveCodersInfo($_[0], @folders);
-    return 1;
+    return 0 unless RetrieveCodersInfo($_[0], @{ $out_unpackinfo{"folders"} });
+    return \%out_unpackinfo;
 }
 
 
 sub ReadStreamsInfo {
     my $buff;
+    my %out_streamsinfo = ();
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
     if($pid == 6){  # pack info
-        return 0 unless ReadPackInfo($_[0]);
+        my $packinfo = ReadPackInfo($_[0]);
+        return 0 unless $packinfo;
+        $out_streamsinfo{"packinfo"} = $packinfo;
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
     }
     if($pid == 7) {  # unpack info
         print("unpack info\n");
-        return 0 unless ReadUnpackInfo($_[0]);
+        my $unpackinfo = ReadUnpackInfo($_[0]);
+        return 0 unless $unpackinfo;
+        $out_streamsinfo{"unpackinfo"} = $unpackinfo;
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
     }
     if($pid != 0x00){ # end id expected
         return 0;    
     }
-    return 1;
+    return \%out_streamsinfo;
+}
+
+sub IsNativeCoder {
+    my $coder = $_[0];
+
+    if(ord(substr($coder->{"method"}, 0, 1)) == 3){
+        if(ord(substr($coder->{"method"}, 1, 1)) == 1) {
+            if(ord(substr($coder->{"method"}, 2, 1)) == 1) {
+                return "LZMA";
+            }
+        }
+    }
+}
+
+sub GetDecompressor {
+    my $folder = $_[0];
+    my %out_decompressors = ();
+    $out_decompressors{"chain"} = ();
+    
+    foreach my $coder (@{ $folder->{"coders"} }) {
+       my $algorithm = IsNativeCoder($coder);
+       push(@{ $out_decompressors{"chain"} }, $algorithm);
+    } 
+    
+    return \%out_decompressors;
+}
+
+sub Decompress {
+    
 }
 
 #------------------------------------------------------------------------------
@@ -333,7 +372,26 @@ sub Process7z($$)
     }
     elsif($pid == 23){  # encoded header
         print("Encoded Header\n");
-        ReadStreamsInfo($raf);
+        my $streamsinfo = ReadStreamsInfo($raf);
+        if($streamsinfo == 0){
+            $et->Warn("Invalid or corrupted file.");
+            return 1;
+        }
+        foreach my $folder (@{ $streamsinfo->{"unpackinfo"}->{"folders"} }) {
+            my @uncompressed = @{ $folder->{"unpacksizes"} };
+            my $compressed_size = $streamsinfo->{"packinfo"}->{"packsizes"}[0];
+            my $uncompressed_size = @uncompressed[scalar(@uncompressed) - 1];
+            my $decomporessor = GetDecompressor($folder);
+            print(Dumper($decomporessor));
+            
+            my $src_start = 32;
+            $src_start += $streamsinfo->{"packinfo"}->{"packpos"};
+            $raf->Seek($src_start, 0);
+            my $remaining = $uncompressed_size;
+            while($remaining > 0){
+                Decompress($raf, $decomporessor, $remaining);
+            }
+        }
     }else{  # Unknown header
         return 0;
     }
