@@ -93,13 +93,15 @@ sub ReadBoolean {
 
 
 sub ReadPackInfo {
+    my $et = shift;
+
     my $buff;
     my %out_packinfo = ();
     $out_packinfo{"packsizes"} = ();
     
     $out_packinfo{"packpos"} = ReadUInt64($_[0]);
     my $numstreams = ReadUInt64($_[0]);
-    print("Num:$numstreams\n");
+    $et->VPrint(0, "Number Of Streams: $numstreams\n");
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -143,6 +145,7 @@ sub findInBinPair {
 
 
 sub ReadFolder {
+    my $et = shift;
     my $buff;
     my $totalin = 0;
     my $totalout = 0;
@@ -153,7 +156,7 @@ sub ReadFolder {
     my %c = ();
 
     my $num_coders = ReadUInt64($_[0]);
-    print("num_coders:$num_coders\n");
+    $et->VPrint(0, "Number of coders: $num_coders\n");
     
     for (my $i = 0; $i < $num_coders; $i++) {
         $_[0]->Read($buff, 1);
@@ -211,6 +214,7 @@ sub ReadFolder {
 }
 
 sub RetrieveCodersInfo{
+    my $et = shift;
     my $buff;
     my @folders = $_[1];
 
@@ -220,7 +224,6 @@ sub RetrieveCodersInfo{
     if($pid != 0x0c){ # coders unpack size id expected
         return 0;
     }
-    print("everything is ok until now($pid)\n");
     foreach my $folder (@folders) {
         $folder->{"unpacksizes"} = ();
         foreach my $c (@{ $folder->{"coders"} }) {
@@ -234,7 +237,7 @@ sub RetrieveCodersInfo{
 
     if($pid == 0x0a){  #crc
         my $numfolders = scalar(@folders);
-        print("num_folders:$numfolders\n");
+        $et->VPrint(0, "Number of folders: $numfolders\n");
         my @defined = ReadBoolean($_[0], $numfolders, 1);
         my @crcs;
         foreach my $crcexist (@defined) {
@@ -257,6 +260,7 @@ sub RetrieveCodersInfo{
 }
 
 sub ReadUnpackInfo {
+    my $et = shift;
     my $buff;
     my %out_unpackinfo = ();
     
@@ -275,31 +279,32 @@ sub ReadUnpackInfo {
     
     if($external == 0x00){
         for (my $i = 0 ; $i < $out_unpackinfo{"numfolders"}; $i++) {
-            my %folder = ReadFolder($_[0]);
+            my %folder = ReadFolder($et, $_[0]);
             push(@{ $out_unpackinfo{"folders"} }, \%folder);
         }
     }
-    return 0 unless RetrieveCodersInfo($_[0], @{ $out_unpackinfo{"folders"} });
+    return 0 unless RetrieveCodersInfo($et, $_[0], @{ $out_unpackinfo{"folders"} });
     return \%out_unpackinfo;
 }
 
 
 sub ReadStreamsInfo {
+    my $et = shift;
     my $buff;
     my %out_streamsinfo = ();
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
     if($pid == 6){  # pack info
-        my $packinfo = ReadPackInfo($_[0]);
+        my $packinfo = ReadPackInfo($et, $_[0]);
         return 0 unless $packinfo;
         $out_streamsinfo{"packinfo"} = $packinfo;
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
     }
     if($pid == 7) {  # unpack info
-        print("unpack info\n");
-        my $unpackinfo = ReadUnpackInfo($_[0]);
+        $et->VPrint(0, "Unpack info data detected.\n");
+        my $unpackinfo = ReadUnpackInfo($et, $_[0]);
         return 0 unless $unpackinfo;
         $out_streamsinfo{"unpackinfo"} = $unpackinfo;
         $_[0]->Read($buff, 1);
@@ -343,6 +348,7 @@ sub GetDecompressor {
 }
 
 sub ReadData {
+    my $et = shift;
     my $decompressor = $_[1];
     my $rest_size = $decompressor->{"input_size"} - $decompressor->{"consumed"};
     my $unused_s = scalar(@{ $decompressor->{"_unused"} });
@@ -353,7 +359,7 @@ sub ReadData {
     }
     if($read_size > 0){
         $decompressor->{"consumed"} += $_[0]->Read($data, $read_size);
-        print("readsize:$read_size\n");
+        $et->VPrint(0, "Compressed Size: $read_size\n");
     }
     return $data;
 }
@@ -362,21 +368,22 @@ sub Decompress_Internal {
     my $data = "";
     for(my $i=0; $i < scalar(@{ $_[0]->{"chain"} }); $i++){
         if(@{ $_[0]->{"_unpacked"} }[$i] < @{ $_[0]->{"_unpacksizes"} }[$i]){
-            print("OK\n");
-            #$data = decompressor.decompress(data, max_length);
             my %opts = ();
             $opts{"Filter"} = Lzma::Filter::Lzma1;
             my ($z, $status) = Compress::Raw::Lzma::RawDecoder->new( %opts );
             $status = $z->code($_[1], $data);
-            print(Dumper(scalar($data));
+            @{ $_[0]->{"_unpacked"} }[$i] += length($data);
         }
     }
+    return $data;
 }
 
 sub Decompress {
+    my $et = shift;
     my $max_length = $_[1];
-    my $data = ReadData($_[0], $_[1]);
-    Decompress_Internal($_[1], $data);
+    my $data = ReadData($et, $_[0], $_[1]);
+    my $tmp = Decompress_Internal($_[1], $data);
+    return $tmp;
 }
 
 #------------------------------------------------------------------------------
@@ -402,7 +409,7 @@ sub Process7z($$)
     
     $raf->Read($buff, 20);
     my ($nextheaderoffset, $nextheadersize) = unpack('QQx', $buff);
-    print("$nextheaderoffset, $nextheadersize\n");
+    $et->VPrint(0, "NextHeaderOffset: $nextheaderoffset, NextHeaderSize: $nextheadersize\n");
     
     $raf->Seek($nextheaderoffset, 1);  # going to next header offset
     $raf->Read($buff, 1);
@@ -411,13 +418,13 @@ sub Process7z($$)
         print("Normal Header\n");
     }
     elsif($pid == 23){  # encoded header
-        print("Encoded Header\n");
-        my $streamsinfo = ReadStreamsInfo($raf);
-        #print(Dumper($streamsinfo));
+        $et->VPrint(0, "Header is encoded, trying to decode\n");
+        my $streamsinfo = ReadStreamsInfo($et, $raf);
         if($streamsinfo == 0){
             $et->Warn("Invalid or corrupted file.");
             return 1;
         }
+        my $buffer2 = "";
         foreach my $folder (@{ $streamsinfo->{"unpackinfo"}->{"folders"} }) {
             my @uncompressed = @{ $folder->{"unpacksizes"} };
             my $compressed_size = $streamsinfo->{"packinfo"}->{"packsizes"}[0];
@@ -428,11 +435,18 @@ sub Process7z($$)
             $src_start += $streamsinfo->{"packinfo"}->{"packpos"};
             $raf->Seek($src_start, 0);
             my $remaining = $uncompressed_size;
-            Decompress($raf, $decomporessor, $remaining);
-            #while($remaining > 0){
-            #    Decompress($raf, $decomporessor, $remaining);
-            #}
+            my $folder_data = "";
+            while($remaining > 0){
+                $folder_data .= Decompress($et, $raf, $decomporessor, $remaining);
+                $remaining = $uncompressed_size - length($folder_data);
+            }
+            $buffer2 = $folder_data;
         }
+        $pid = ord(substr($buffer2, 0, 1));
+        if($pid != 0x01){ # header field expected
+            return 0;    
+        }
+        ExtractHeaderInfo($buffer2);
     }else{  # Unknown header
         return 0;
     }
