@@ -92,6 +92,21 @@ sub ReadBoolean {
 }
 
 
+sub ReadUTF16 { 
+    my $val = "";
+    my $ch;
+    
+    for(my $i=0; $i < 65536; $i++){
+        $_[0]->Read($ch, 2);
+        if($ch eq "\x0\x0"){
+            last;
+        }
+        $val .= $ch;
+    }
+    return $val;
+}
+
+
 sub ReadPackInfo {
     my $et = shift;
 
@@ -455,9 +470,19 @@ sub Decompress {
     return $tmp;
 }
 
+sub ReadName {
+    my $numfiles = $_[1];
+    
+    for(my $i=0; $i < $numfiles; $i++){
+        @{ $_[2] }[$i]->{"filename"} = ReadUTF16($_[0]);
+    }
+}
+
 
 sub ReadFilesInfo {
     my $et = shift;
+    my $buff;
+
     my $numfiles = ReadUInt64($_[0]);
     my @out_files = ();
     for(my $i = 0; $i < $numfiles; $i++){
@@ -467,6 +492,46 @@ sub ReadFilesInfo {
     }
     my $numemptystreams = 0;
     $et->VPrint(0, "Number of files: $numfiles\n");
+    while(1){
+        $_[0]->Read($buff, 1);
+        my $prop = ord($buff);
+        if($prop == 0){  # end
+            return @out_files;
+        }
+        my $size = ReadUInt64($_[0]);
+        if($prop == 25) {  # dummy
+            $_[0]->Seek($size, 1);
+            next;
+        }
+        $_[0]->Read($buff, $size);
+        my $buffer = new File::RandomAccess(\$buff);
+        if($prop == 14){  # empty stream
+            my @isempty = ReadBoolean($buffer, $numfiles, 0);
+            my $numemptystreams = 0;
+            for(my $i = 0; $i < $numfiles; $i++){
+                if($isempty[$i] == 0){
+                    $out_files[$i]->{"emptystream"} = 0;
+                }
+                else{
+                    $out_files[$i]->{"emptystream"} = 1;
+                    $numemptystreams++;
+                }
+            }
+        }
+        elsif($prop == 15) {  # empty file
+            
+        }
+        elsif($prop == 17){  # name
+            $et->VPrint(0, "Name prop detected.\n");
+            my $external;
+            $buffer->Read($external, 1);
+            my $is_external = ord($external);
+            if($is_external == 0){
+                ReadName($buffer, $numfiles, \@out_files);
+                print(Dumper(@out_files));
+            }
+        }
+    }
 }
 
 
