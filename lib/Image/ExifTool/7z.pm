@@ -294,6 +294,7 @@ sub ReadSubstreamsInfo {
     $out_substreamsinfo{"num_unpackstreams_folders"} = ();
     
     my $numfolders = $_[1];
+    my $folders = $_[2];
     
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -308,7 +309,42 @@ sub ReadSubstreamsInfo {
     if($pid == 9){  # size property
         $et->VPrint(0, "Size property detected.\n");
         $out_substreamsinfo{"unpacksizes"} = ();
+        for(my $i=0; $i< scalar(@{ $out_substreamsinfo{"num_unpackstreams_folders"} }); $i++){
+            my $totalsize = 0;
+            for(my $j=1; $j < @{ $out_substreamsinfo{"num_unpackstreams_folders"} }[$i]; $j++){
+                my $size = ReadUInt64($_[0]);
+                push(@{ $out_substreamsinfo{"unpacksizes"} }, $size);
+                $totalsize += $size;
+            }
+            # self.unpacksizes.append(folders[i].get_unpack_size() - totalsize)
+        }
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
     }
+    my $num_digests = 0;
+    my $num_digests_total = 0;
+    for (my $i = 0 ; $i < $numfolders; $i++) {
+        my $numsubstreams = @{ $out_substreamsinfo{"num_unpackstreams_folders"} }[$i];
+        if($numsubstreams != 1 or not @{ $folders }[$i]->{"digestdefined"}){
+            $num_digests += $numsubstreams;
+        }
+        $num_digests_total += $numsubstreams;
+    }
+    $et->VPrint(0, "Num Digests Total: $num_digests_total\n");
+    if($pid == 10) {  # crc property
+        $et->VPrint(0, "CRC property detected.\n");
+        my @crcs;
+        my @defined = ReadBoolean($_[0], $num_digests, 1);
+        foreach my $crcexist (@defined) {
+            push(@crcs, ReadUInt32($_[0]));
+        }
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
+    }
+    if($pid != 0x00){ # end id expected
+        return 0;    
+    }
+    return \%out_substreamsinfo;
 }
 
 
@@ -420,6 +456,20 @@ sub Decompress {
 }
 
 
+sub ReadFilesInfo {
+    my $et = shift;
+    my $numfiles = ReadUInt64($_[0]);
+    my @out_files = ();
+    for(my $i = 0; $i < $numfiles; $i++){
+        my %new_file = ();
+        $new_file{"emptystream"} = 0;
+        push(@out_files, \%new_file);
+    }
+    my $numemptystreams = 0;
+    $et->VPrint(0, "Number of files: $numfiles\n");
+}
+
+
 sub ExtractHeaderInfo {
     my $et = shift;
     my $buff;
@@ -436,9 +486,9 @@ sub ExtractHeaderInfo {
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
     }
-    print($pid);
     if($pid == 0x05){
         $et->VPrint(0, "File info pid reached.\n");
+        ReadFilesInfo($et, $_[0]);
     }
 }
 
