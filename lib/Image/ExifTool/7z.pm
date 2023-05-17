@@ -287,10 +287,35 @@ sub ReadUnpackInfo {
     return \%out_unpackinfo;
 }
 
+sub ReadSubstreamsInfo {
+    my $et = shift;
+    my $buff;
+    my %out_substreamsinfo = ();
+    $out_substreamsinfo{"num_unpackstreams_folders"} = ();
+    
+    my $numfolders = $_[1];
+    
+    $_[0]->Read($buff, 1);
+    my $pid = ord($buff);
+    if($pid == 13){  # num unpack stream
+        $et->VPrint(0, "Num unpack stream detected.\n");
+        for (my $i = 0 ; $i < $numfolders; $i++) {
+            push(@{ $out_substreamsinfo{"num_unpackstreams_folders"} }, ReadUInt64($_[0]));
+        }
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
+    }
+    if($pid == 9){  # size property
+        $et->VPrint(0, "Size property detected.\n");
+        $out_substreamsinfo{"unpacksizes"} = ();
+    }
+}
+
 
 sub ReadStreamsInfo {
     my $et = shift;
     my $buff;
+    my $unpackinfo;
     my %out_streamsinfo = ();
     
     $_[0]->Read($buff, 1);
@@ -304,9 +329,17 @@ sub ReadStreamsInfo {
     }
     if($pid == 7) {  # unpack info
         $et->VPrint(0, "Unpack info data detected.\n");
-        my $unpackinfo = ReadUnpackInfo($et, $_[0]);
+        $unpackinfo = ReadUnpackInfo($et, $_[0]);
         return 0 unless $unpackinfo;
         $out_streamsinfo{"unpackinfo"} = $unpackinfo;
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
+    }
+    if($pid == 8){  # substreams info
+        $et->VPrint(0, "Substreams info data detected.\n");
+        my $substreamsinfo = ReadSubstreamsInfo($et, $_[0], $unpackinfo->{"numfolders"}, $unpackinfo->{"folders"});
+        return 0 unless $substreamsinfo;
+        $out_streamsinfo{"substreamsinfo"} = $substreamsinfo;
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
     }
@@ -386,6 +419,29 @@ sub Decompress {
     return $tmp;
 }
 
+
+sub ExtractHeaderInfo {
+    my $et = shift;
+    my $buff;
+
+    $_[0]->Read($buff, 1);
+    my $pid = ord($buff);
+    
+    if($pid == 0x04){
+        my $mainstreams = ReadStreamsInfo($et, $_[0]);
+        if($mainstreams == 0){
+            $et->Warn("Invalid or corrupted file.");
+            return 0;
+        }
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
+    }
+    print($pid);
+    if($pid == 0x05){
+        $et->VPrint(0, "File info pid reached.\n");
+    }
+}
+
 #------------------------------------------------------------------------------
 # Extract information from a 7z file
 # Inputs: 0) ExifTool object reference, 1) dirInfo reference
@@ -424,7 +480,7 @@ sub Process7z($$)
             $et->Warn("Invalid or corrupted file.");
             return 1;
         }
-        my $buffer2 = "";
+        my $buffer2 = (); 
         foreach my $folder (@{ $streamsinfo->{"unpackinfo"}->{"folders"} }) {
             my @uncompressed = @{ $folder->{"unpacksizes"} };
             my $compressed_size = $streamsinfo->{"packinfo"}->{"packsizes"}[0];
@@ -440,13 +496,15 @@ sub Process7z($$)
                 $folder_data .= Decompress($et, $raf, $decomporessor, $remaining);
                 $remaining = $uncompressed_size - length($folder_data);
             }
-            $buffer2 = $folder_data;
+            $buffer2 = new File::RandomAccess(\$folder_data);
         }
-        $pid = ord(substr($buffer2, 0, 1));
+        $buffer2->Seek(0, 0);
+        $buffer2->Read($buff, 1);
+        $pid = ord($buff);
         if($pid != 0x01){ # header field expected
             return 0;    
         }
-        ExtractHeaderInfo($buffer2);
+        ExtractHeaderInfo($et, $buffer2);
     }else{  # Unknown header
         return 0;
     }
