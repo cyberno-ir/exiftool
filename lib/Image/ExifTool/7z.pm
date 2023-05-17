@@ -14,6 +14,7 @@ package Image::ExifTool::7z;
 use strict;
 
 use Data::Dumper;
+use Compress::Raw::Lzma;
 
 
 sub ReadUInt32 {
@@ -324,19 +325,57 @@ sub IsNativeCoder {
 
 sub GetDecompressor {
     my $folder = $_[0];
-    my %out_decompressors = ();
-    $out_decompressors{"chain"} = ();
+    my %out_decompressor = ();
+    $out_decompressor{"chain"} = ();
+    $out_decompressor{"input_size"} = $_[1];
+    $out_decompressor{"_unpacksizes"} = $folder->{"unpacksizes"};
+    @{ $out_decompressor{"_unpacked"} } = (0) x scalar(@{ $out_decompressor{"_unpacksizes"} });
+    $out_decompressor{"consumed"} = 0;
+    $out_decompressor{"block_size"} = 32768;
+    $out_decompressor{"_unused"} = [];
     
     foreach my $coder (@{ $folder->{"coders"} }) {
        my $algorithm = IsNativeCoder($coder);
-       push(@{ $out_decompressors{"chain"} }, $algorithm);
+       push(@{ $out_decompressor{"chain"} }, $algorithm);
     } 
     
-    return \%out_decompressors;
+    return \%out_decompressor;
+}
+
+sub ReadData {
+    my $decompressor = $_[1];
+    my $rest_size = $decompressor->{"input_size"} - $decompressor->{"consumed"};
+    my $unused_s = scalar(@{ $decompressor->{"_unused"} });
+    my $read_size = $rest_size - $unused_s;
+    my $data = "";
+    if($read_size > $decompressor->{"block_size"} - $unused_s){
+        $read_size = $decompressor->{"block_size"} - $unused_s;
+    }
+    if($read_size > 0){
+        $decompressor->{"consumed"} += $_[0]->Read($data, $read_size);
+        print("readsize:$read_size\n");
+    }
+    return $data;
+}
+
+sub Decompress_Internal {
+    my $data = (0) x 65536;
+    for(my $i=0; $i < scalar(@{ $_[0]->{"chain"} }); $i++){
+        if(@{ $_[0]->{"_unpacked"} }[$i] < @{ $_[0]->{"_unpacksizes"} }[$i]){
+            print("OK\n");
+            #$data = decompressor.decompress(data, max_length);
+            my %opts = ();
+            $opts{"Filter"} = Lzma::Filter::Lzma1;
+            my ($z, $status) = Compress::Raw::Lzma::RawDecoder->new( %opts );
+            $status = $z->code($_[1], $data);
+        }
+    }
 }
 
 sub Decompress {
-    
+    my $max_length = $_[1];
+    my $data = ReadData($_[0], $_[1]);
+    Decompress_Internal($_[1], $data);
 }
 
 #------------------------------------------------------------------------------
@@ -373,6 +412,7 @@ sub Process7z($$)
     elsif($pid == 23){  # encoded header
         print("Encoded Header\n");
         my $streamsinfo = ReadStreamsInfo($raf);
+        #print(Dumper($streamsinfo));
         if($streamsinfo == 0){
             $et->Warn("Invalid or corrupted file.");
             return 1;
@@ -381,16 +421,16 @@ sub Process7z($$)
             my @uncompressed = @{ $folder->{"unpacksizes"} };
             my $compressed_size = $streamsinfo->{"packinfo"}->{"packsizes"}[0];
             my $uncompressed_size = @uncompressed[scalar(@uncompressed) - 1];
-            my $decomporessor = GetDecompressor($folder);
-            print(Dumper($decomporessor));
+            my $decomporessor = GetDecompressor($folder, $compressed_size);
             
             my $src_start = 32;
             $src_start += $streamsinfo->{"packinfo"}->{"packpos"};
             $raf->Seek($src_start, 0);
             my $remaining = $uncompressed_size;
-            while($remaining > 0){
-                Decompress($raf, $decomporessor, $remaining);
-            }
+            Decompress($raf, $decomporessor, $remaining);
+            #while($remaining > 0){
+            #    Decompress($raf, $decomporessor, $remaining);
+            #}
         }
     }else{  # Unknown header
         return 0;
