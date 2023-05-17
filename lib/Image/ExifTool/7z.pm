@@ -359,7 +359,7 @@ sub ReadData {
     }
     if($read_size > 0){
         $decompressor->{"consumed"} += $_[0]->Read($data, $read_size);
-        $et->VPrint(0, "Compressed Size: $read_size\n");
+        $et->VPrint(0, "Compressed size: $read_size\n");
     }
     return $data;
 }
