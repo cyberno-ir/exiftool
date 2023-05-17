@@ -359,7 +359,7 @@ sub ReadData {
 }
 
 sub Decompress_Internal {
-    my $data = (0) x 65536;
+    my $data = "";
     for(my $i=0; $i < scalar(@{ $_[0]->{"chain"} }); $i++){
         if(@{ $_[0]->{"_unpacked"} }[$i] < @{ $_[0]->{"_unpacksizes"} }[$i]){
             print("OK\n");
@@ -368,6 +368,7 @@ sub Decompress_Internal {
             $opts{"Filter"} = Lzma::Filter::Lzma1;
             my ($z, $status) = Compress::Raw::Lzma::RawDecoder->new( %opts );
             $status = $z->code($_[1], $data);
+            print(Dumper(scalar($data));
         }
     }
 }
