@@ -177,12 +177,12 @@ sub ReadFolder {
     $out_folder{"packed_indices"} = ();
     $out_folder{"bindpairs"} = ();
     $out_folder{"coders"} = ();
-    my %c = ();
 
     my $num_coders = ReadUInt64($_[0]);
     $et->VPrint(0, "Number of coders: $num_coders\n");
     
     for (my $i = 0; $i < $num_coders; $i++) {
+        my %c = ();
         $_[0]->Read($buff, 1);
         my $b = ord($buff);
         my $methodsize = $b & 0xF;
@@ -426,9 +426,20 @@ sub IsNativeCoder {
             }
         }
     }
+    elsif(ord(substr($coder->{"method"}, 0, 1)) == 6){
+        if(ord(substr($coder->{"method"}, 1, 1)) == 0xf1) {
+            if(ord(substr($coder->{"method"}, 2, 1)) == 7) {
+                if(ord(substr($coder->{"method"}, 3, 1)) == 1) {
+                    return "7zAES";
+                }
+            }
+        }
+    }
 }
 
 sub GetDecompressor {
+    my $et = shift;
+    
     my $folder = $_[0];
     my %out_decompressor = ();
     $out_decompressor{"chain"} = ();
@@ -441,7 +452,13 @@ sub GetDecompressor {
     
     foreach my $coder (@{ $folder->{"coders"} }) {
        my $algorithm = IsNativeCoder($coder);
-       push(@{ $out_decompressor{"chain"} }, $algorithm);
+       if($algorithm eq "7zAES") {
+           $et->Warn("File is encrypted.", 0);
+           return 0;
+       }
+       else{
+           push(@{ $out_decompressor{"chain"} }, $algorithm);
+       }
     } 
     
     return \%out_decompressor;
@@ -645,7 +662,7 @@ sub DisplayFiles {
    my $docNum = 0;
    
    foreach my $currentfile (@{ $_[0] }){
-       $et->FoundTag('LastWriteTime', $currentfile->{"lastwritetime"});
+       $et->FoundTag('ModifyDate', $currentfile->{"lastwritetime"});
        $et->FoundTag('ArchivedFileName', $currentfile->{"filename"});
        $docNum++;
    }
@@ -692,7 +709,7 @@ sub Process7z($$)
         DisplayFiles($et, @{ $headerinfo->{"files_info"} });
     }
     elsif($pid == 23){  # encoded header
-        $et->VPrint(0, "Header is encoded, trying to decode\n");
+        $et->VPrint(0, "Encoded Header detected. trying to decode\n");
         my $streamsinfo = ReadStreamsInfo($et, $raf);
         if($streamsinfo == 0){
             $et->Warn("Invalid or corrupted file.");
@@ -703,7 +720,11 @@ sub Process7z($$)
             my @uncompressed = @{ $folder->{"unpacksizes"} };
             my $compressed_size = $streamsinfo->{"packinfo"}->{"packsizes"}[0];
             my $uncompressed_size = @uncompressed[scalar(@uncompressed) - 1];
-            my $decomporessor = GetDecompressor($folder, $compressed_size);
+            my $decomporessor = GetDecompressor($et, $folder, $compressed_size);
+            if($decomporessor == 0){
+                $et->Warn("Invalid or corrupted file.");
+                return 1;
+            }
             
             my $src_start = 32;
             $src_start += $streamsinfo->{"packinfo"}->{"packpos"};
