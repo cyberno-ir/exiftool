@@ -74,16 +74,17 @@ sub ReadBoolean {
     my $buff;
     my $count = $_[1];
     my $checkall = $_[2];
+    my @result = ();
     
     if($checkall){
         $_[0]->Read($buff, 1);
         my $all_defined = ord($buff);
         if($all_defined != 0){
-            return (1)x$count;
+            @result = (1)x$count;
+            return @result;
         }
     }
     
-    my @result = ();
     my $b = 0;
     my $mask = 0;
     
@@ -332,6 +333,9 @@ sub ReadSubstreamsInfo {
         $_[0]->Read($buff, 1);
         $pid = ord($buff);
     }
+    else{
+        @{ $out_substreamsinfo{"num_unpackstreams_folders"} } = (1)x$numfolders;
+    }
     if($pid == 9){  # size property
         $et->VPrint(0, "Size property detected.\n");
         $out_substreamsinfo{"unpacksizes"} = ();
@@ -516,6 +520,20 @@ sub ReadTimes {
     }
 }
 
+sub ReadAttributes {
+    my $numfiles = $_[1];
+
+    for(my $i=0; $i < $numfiles; $i++){
+        if($_[2][$i]){
+            my $value = ReadUInt32($_[0]);
+            @{ $_[3] }[$i]->{"attributes"} = $value >> 8;
+        }
+        else{
+            @{ $_[3] }[$i]->{"attributes"} = undef;
+        }
+    }
+}
+
 sub ReadFilesInfo {
     my $et = shift;
     my $buff;
@@ -533,7 +551,7 @@ sub ReadFilesInfo {
         $_[0]->Read($buff, 1);
         my $prop = ord($buff);
         if($prop == 0){  # end
-            return @out_files;
+            return \@out_files;
         }
         my $size = ReadUInt64($_[0]);
         if($prop == 25) {  # dummy
@@ -574,6 +592,16 @@ sub ReadFilesInfo {
         }
         elsif($prop == 21){  # attributes
             $et->VPrint(0, "File attributes detected.\n");
+            my $external;
+            my @defined = ReadBoolean($buffer, $numfiles, 1);
+            $_[0]->Read($external, 1);
+            if(ord($external) == 0){
+                ReadAttributes($buffer, $numfiles, \@defined, \@out_files);
+            }
+            else{
+                my $dataindex = ReadUINT64($buffer);
+                #TODO: try to read external data
+            }
         }
     }
 }
@@ -582,6 +610,9 @@ sub ReadFilesInfo {
 sub ExtractHeaderInfo {
     my $et = shift;
     my $buff;
+    my %out_headerinfo = ();
+    $out_headerinfo{"files_info"} = ();
+    my $files_info;
 
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -589,7 +620,7 @@ sub ExtractHeaderInfo {
     if($pid == 0x04){
         my $mainstreams = ReadStreamsInfo($et, $_[0]);
         if($mainstreams == 0){
-            $et->Warn("Invalid or corrupted file. (Extract Header Info)");
+            $et->Warn("Invalid or corrupted file. (ExtractHeaderInfo)");
             return 0;
         }
         $_[0]->Read($buff, 1);
@@ -597,8 +628,30 @@ sub ExtractHeaderInfo {
     }
     if($pid == 0x05){
         $et->VPrint(0, "File info pid reached.\n");
-        ReadFilesInfo($et, $_[0]);
+        $files_info = ReadFilesInfo($et, $_[0]);
+        push(@{ $out_headerinfo{"files_info"} }, $files_info);
+        $_[0]->Read($buff, 1);
+        $pid = ord($buff);
     }
+    if($pid != 0x00){ # end id expected
+        $et->VPrint(0, "Invalid PID: $pid\n");
+        return 0;    
+    }
+    return \%out_headerinfo;
+}
+
+sub DisplayFiles {
+   my $et = shift;
+   my $docNum = 0;
+   
+   foreach my $currentfile (@{ $_[0] }){
+       $et->FoundTag('LastWriteTime', $currentfile->{"lastwritetime"});
+       $et->FoundTag('ArchivedFileName', $currentfile->{"filename"});
+       $docNum++;
+   }
+   if($docNum > 1 and not $et->Options('Duplicates')){
+      $et->Warn("Use the Duplicates option to extract tags for all $docNum files", 1);
+   }
 }
 
 #------------------------------------------------------------------------------
@@ -630,7 +683,13 @@ sub Process7z($$)
     $raf->Read($buff, 1);
     my $pid = ord($buff);
     if($pid == 1){  # normal header
-        print("Normal Header\n");
+        $et->VPrint(0,"Normal header detected. trying to decode\n");
+        my $headerinfo = ExtractHeaderInfo($et, $raf);
+        if($headerinfo == 0){
+            $et->Warn("Invalid or corrupted file.");
+            return 1;
+        }
+        DisplayFiles($et, @{ $headerinfo->{"files_info"} });
     }
     elsif($pid == 23){  # encoded header
         $et->VPrint(0, "Header is encoded, trying to decode\n");
@@ -663,7 +722,12 @@ sub Process7z($$)
         if($pid != 0x01){ # header field expected
             return 0;    
         }
-        ExtractHeaderInfo($et, $buffer2);
+        my $headerinfo = ExtractHeaderInfo($et, $buffer2);
+        if($headerinfo == 0){
+            $et->Warn("Invalid or corrupted file.");
+            return 1;
+        }
+        DisplayFiles($et, @{ $headerinfo->{"files_info"} });
     }else{  # Unknown header
         return 0;
     }
