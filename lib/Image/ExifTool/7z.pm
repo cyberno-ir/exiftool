@@ -61,6 +61,14 @@ sub ReadUInt64 {
     return $value + ($highpart << ($vlen * 8));
 }
 
+sub ReadRealUInt64 {
+    my $buff;
+    
+    $_[0]->Read($buff, 8);
+    my $value = unpack('Q', $buff);
+    return $value;
+}
+
 
 sub ReadBoolean {
     my $buff;
@@ -98,7 +106,7 @@ sub ReadUTF16 {
     
     for(my $i=0; $i < 65536; $i++){
         $_[0]->Read($ch, 2);
-        if($ch eq "\x0\x0"){
+        if($ch eq "\0\0"){
             last;
         }
         $val .= $ch;
@@ -203,7 +211,8 @@ sub ReadFolder {
         } 
         else {
             $c{"properties"} = undef;
-        }      
+        }
+        $et->VPrint(0, "Reading coder $i\n");
         push(@{ $out_folder{"coders"} }, \%c);   
     }
     my $num_bindpairs = $totalout - 1;
@@ -225,13 +234,13 @@ sub ReadFolder {
         }
     }
     
-    return %out_folder;
+    return \%out_folder;
 }
 
 sub RetrieveCodersInfo{
     my $et = shift;
     my $buff;
-    my @folders = $_[1];
+    my @folders = @{ $_[1] };
 
     $_[0]->Read($buff, 1);
     my $pid = ord($buff);
@@ -269,6 +278,7 @@ sub RetrieveCodersInfo{
     }
     
     if($pid != 0x00){ # end id expected
+        $et->VPrint(0, "Invalid PID: $pid\n");
         return 0;    
     }
     return 1;
@@ -294,11 +304,12 @@ sub ReadUnpackInfo {
     
     if($external == 0x00){
         for (my $i = 0 ; $i < $out_unpackinfo{"numfolders"}; $i++) {
-            my %folder = ReadFolder($et, $_[0]);
-            push(@{ $out_unpackinfo{"folders"} }, \%folder);
+            $et->VPrint(0, "Reading folder $i\n");
+            my $folder = ReadFolder($et, $_[0]);
+            push(@{ $out_unpackinfo{"folders"} }, $folder);
         }
     }
-    return 0 unless RetrieveCodersInfo($et, $_[0], @{ $out_unpackinfo{"folders"} });
+    return 0 unless RetrieveCodersInfo($et, $_[0], $out_unpackinfo{"folders"});
     return \%out_unpackinfo;
 }
 
@@ -395,6 +406,7 @@ sub ReadStreamsInfo {
         $pid = ord($buff);
     }
     if($pid != 0x00){ # end id expected
+        $et->VPrint(0, "Invalid PID: $pid\n");
         return 0;    
     }
     return \%out_streamsinfo;
@@ -478,6 +490,31 @@ sub ReadName {
     }
 }
 
+sub ReadTimes {
+    my $et = shift;
+    my $external;
+    my $numfiles = $_[1];
+    my $name = $_[2];
+    
+    my @defined = ReadBoolean($_[0], $numfiles, 1);
+    $_[0]->Read($external, 1);
+    if(ord($external) != 0){
+        $et->Warn("Invalid or corrupted file. (ReadTimes)");
+        return 0;
+    }
+    
+    for(my $i=0; $i < $numfiles; $i++){
+        if($defined[$i]){
+            my $value = ReadRealUInt64($_[0]);
+            $value = $value / 10000000.0 - 11644473600;
+            $value = Image::ExifTool::ConvertUnixTime($value, 1);
+            @{ $_[3] }[$i]->{$name} = $value;
+        }
+        else{
+            @{ $_[3] }[$i]->{$name} = undef;
+        }
+    }
+}
 
 sub ReadFilesInfo {
     my $et = shift;
@@ -528,8 +565,15 @@ sub ReadFilesInfo {
             my $is_external = ord($external);
             if($is_external == 0){
                 ReadName($buffer, $numfiles, \@out_files);
-                print(Dumper(@out_files));
+                #print(Dumper(@out_files));
             }
+        }
+        elsif($prop == 20){  # last write time
+            $et->VPrint(0, "Last write time detected.\n");
+            ReadTimes($et, $buffer, $numfiles, "lastwritetime", \@out_files);
+        }
+        elsif($prop == 21){  # attributes
+            $et->VPrint(0, "File attributes detected.\n");
         }
     }
 }
@@ -545,7 +589,7 @@ sub ExtractHeaderInfo {
     if($pid == 0x04){
         my $mainstreams = ReadStreamsInfo($et, $_[0]);
         if($mainstreams == 0){
-            $et->Warn("Invalid or corrupted file.");
+            $et->Warn("Invalid or corrupted file. (Extract Header Info)");
             return 0;
         }
         $_[0]->Read($buff, 1);
